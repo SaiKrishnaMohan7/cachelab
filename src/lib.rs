@@ -1,15 +1,18 @@
-use std::collections::HashMap;
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 
 pub struct Cache {
-    store: HashMap<u32, u32>,
-    computes: u32,
+    store: RefCell<HashMap<u32, u32>>,
+    computes: Cell<u32>,
 }
 
 impl Cache {
     pub fn new() -> Self {
         return Self {
-            store: HashMap::new(),
-            computes: 0,
+            store: RefCell::new(HashMap::new()),
+            computes: Cell::new(0),
         };
     }
     fn expensive_compute(key: u32) -> u32 {
@@ -18,30 +21,32 @@ impl Cache {
 }
 
 impl Cache {
-    // &mut is contagious upward.
-    // Any method that calls a &mut self method must itself take &mut self.
-    // So extracting helpers can never launder it away — it propagates to every caller in the chain until something breaks it.
-    pub fn get(&mut self, key: u32) -> u32 {
-        if let Some(value) = self.store.get(&key) {
+    pub fn get(&self, key: u32) -> u32 {
+        if let Some(value) = self.store.borrow().get(&key) {
             return *value;
         }
         let val = Self::expensive_compute(key);
-        self.store.insert(key, val);
+        self.store.borrow_mut().insert(key, val);
         self.compute();
 
         return val;
     }
 
-    fn compute(&mut self) {
-        self.computes += 1;
+    fn compute(&self) {
+        self.computes.set(self.computes.get() + 1);
     }
 
-    pub fn remove(&mut self, key: u32) -> bool {
-        if let Some(_) = self.store.remove(&key) {
+    pub fn remove(&self, key: u32) -> bool {
+        if let Some(_) = self.store.borrow_mut().remove(&key) {
             return true;
         }
 
         return false;
+    }
+
+    // to be used by integration test later on
+    pub fn get_compute(&self) -> u32 {
+        return self.computes.get();
     }
 }
 
@@ -57,18 +62,16 @@ mod tests {
     // Mark a fn as a runnable test
     #[test]
     fn computes_on_miss() {
-        // Even though I am only doing a get, a read, I am still forced to declare as mut
-        // THIS is the case for bulding in Interior Mutability
-        let mut cache = Cache::new();
+        let cache = Cache::new();
         assert_eq!(cache.get(3), 9);
-        assert_eq!(cache.computes, 1)
+        assert_eq!(cache.computes.get(), 1);
     }
 
     #[test]
     fn compute_stays_same_for_existing_value() {
-        let mut cache = Cache::new();
+        let cache = Cache::new();
         assert_eq!(cache.get(3), 9);
         assert_eq!(cache.get(3), 9);
-        assert_eq!(cache.computes, 1);
+        assert_eq!(cache.computes.get(), 1);
     }
 }
