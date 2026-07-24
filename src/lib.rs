@@ -3,8 +3,18 @@ use std::{
     collections::HashMap,
 };
 
+pub struct Entry {
+    key: u32,
+    value: u32,
+}
+
+impl Drop for Entry {
+    fn drop(&mut self) {
+        println!("Entry Dropped for key: {}", self.key);
+    }
+}
 pub struct Cache {
-    store: RefCell<HashMap<u32, u32>>,
+    store: RefCell<HashMap<u32, Entry>>,
     computes: Cell<u32>,
 }
 
@@ -22,11 +32,22 @@ impl Cache {
 
 impl Cache {
     pub fn get(&self, key: u32) -> u32 {
-        if let Some(value) = self.store.borrow().get(&key) {
-            return *value;
+        // `&` in a pattern STRIPS a reference layer — same operation as `*` in an expression.
+        // Both are gated by Copy: stripping has to produce an owned value, and for a
+        // non-Copy type the only way to do that is to MOVE it out — illegal through a `&`.
+        //
+        //   HashMap<u32, u32>   -> Some(&v) works: u32 is Copy, stripping duplicates it.
+        //   HashMap<u32, Entry> -> Some(&e) FAILS: Entry is not Copy, stripping would move
+        //                          it out of the map, which we only have a `&` to.
+        //
+        // So: don't strip. Bind the reference, read the Copy field through it, move nothing.
+        if let Some(entry) = self.store.borrow().get(&key) {
+            return entry.value; // entry: &Entry — auto-deref, copies out just the u32 field
         }
         let val = Self::expensive_compute(key);
-        self.store.borrow_mut().insert(key, val);
+        self.store
+            .borrow_mut()
+            .insert(key, Entry { key, value: val });
         self.compute();
 
         return val;
@@ -36,12 +57,8 @@ impl Cache {
         self.computes.set(self.computes.get() + 1);
     }
 
-    pub fn remove(&self, key: u32) -> bool {
-        if let Some(_) = self.store.borrow_mut().remove(&key) {
-            return true;
-        }
-
-        return false;
+    pub fn remove(&self, key: u32) -> Option<Entry> {
+        return self.store.borrow_mut().remove(&key);
     }
 
     // to be used by integration test later on
