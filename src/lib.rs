@@ -15,7 +15,7 @@ impl Drop for Entry {
 }
 pub struct Cache {
     store: RefCell<HashMap<u32, Entry>>,
-    recents: RefCell<Vec<u32>>,
+    recents: RefCell<Vec<Entry>>,
     computes: Cell<u32>,
 }
 
@@ -41,7 +41,7 @@ impl Cache {
         self.store
             .borrow_mut()
             .insert(key, Entry { key, value: val });
-        self.recents.borrow_mut().push(key);
+        self.recents.borrow_mut().push(Entry { key, value: val }); // not the same object as what is being stored in store! A copy... Rc is needed now since the same Entry object has to be coowned by HashMap and Vec
         self.compute();
 
         return val;
@@ -61,7 +61,7 @@ impl Cache {
     }
 
     pub fn recent_keys(&self) -> Vec<u32> {
-        return self.recents.borrow().iter().map(|k| *k).collect();
+        return self.recents.borrow().iter().map(|e| e.key).collect();
     }
 }
 
