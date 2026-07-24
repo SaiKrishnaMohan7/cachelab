@@ -15,6 +15,7 @@ impl Drop for Entry {
 }
 pub struct Cache {
     store: RefCell<HashMap<u32, Entry>>,
+    recents: RefCell<Vec<u32>>,
     computes: Cell<u32>,
 }
 
@@ -22,6 +23,7 @@ impl Cache {
     pub fn new() -> Self {
         return Self {
             store: RefCell::new(HashMap::new()),
+            recents: RefCell::new(Vec::new()),
             computes: Cell::new(0),
         };
     }
@@ -32,22 +34,14 @@ impl Cache {
 
 impl Cache {
     pub fn get(&self, key: u32) -> u32 {
-        // `&` in a pattern STRIPS a reference layer — same operation as `*` in an expression.
-        // Both are gated by Copy: stripping has to produce an owned value, and for a
-        // non-Copy type the only way to do that is to MOVE it out — illegal through a `&`.
-        //
-        //   HashMap<u32, u32>   -> Some(&v) works: u32 is Copy, stripping duplicates it.
-        //   HashMap<u32, Entry> -> Some(&e) FAILS: Entry is not Copy, stripping would move
-        //                          it out of the map, which we only have a `&` to.
-        //
-        // So: don't strip. Bind the reference, read the Copy field through it, move nothing.
         if let Some(entry) = self.store.borrow().get(&key) {
-            return entry.value; // entry: &Entry — auto-deref, copies out just the u32 field
+            return entry.value;
         }
         let val = Self::expensive_compute(key);
         self.store
             .borrow_mut()
             .insert(key, Entry { key, value: val });
+        self.recents.borrow_mut().push(key);
         self.compute();
 
         return val;
@@ -65,18 +59,16 @@ impl Cache {
     pub fn get_compute(&self) -> u32 {
         return self.computes.get();
     }
+
+    pub fn recent_keys(&self) -> Vec<u32> {
+        return self.recents.borrow().iter().map(|k| *k).collect();
+    }
 }
 
-// cfg gates the module
-// will be present in bin and only run during cargo test
 #[cfg(test)]
-// a child module.
-// Child modules can see the parent's private items, which is why cache.count works without a getter.
 mod tests {
-    // pull everything from the parent module (Cache, etc.) into scope.
     use super::*;
 
-    // Mark a fn as a runnable test
     #[test]
     fn computes_on_miss() {
         let cache = Cache::new();
@@ -90,5 +82,56 @@ mod tests {
         assert_eq!(cache.get(3), 9);
         assert_eq!(cache.get(3), 9);
         assert_eq!(cache.computes.get(), 1);
+    }
+
+    #[test]
+    fn remove_returns_entry_for_existing_key() {
+        let cache = Cache::new();
+        cache.get(3);
+        let removed = cache.remove(3);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().value, 9);
+    }
+
+    #[test]
+    fn remove_returns_none_for_missing_key() {
+        let cache = Cache::new();
+        assert!(cache.remove(99).is_none());
+    }
+
+    #[test]
+    fn removed_key_recomputes_on_next_get() {
+        let cache = Cache::new();
+        cache.get(3);
+        assert_eq!(cache.computes.get(), 1);
+
+        cache.remove(3);
+        cache.get(3);
+        assert_eq!(cache.computes.get(), 2); // gone from store → recomputed
+    }
+
+    #[test]
+    fn recent_keys_are_in_insertion_order() {
+        let cache = Cache::new();
+        cache.get(5);
+        cache.get(2);
+        cache.get(9);
+        assert_eq!(cache.recent_keys(), vec![5, 2, 9]);
+    }
+
+    #[test]
+    fn cache_hit_does_not_duplicate_recent_key() {
+        let cache = Cache::new();
+        cache.get(5);
+        cache.get(5); // hit — should not push again
+        assert_eq!(cache.recent_keys(), vec![5]);
+    }
+
+    #[test]
+    fn recent_keys_after_remove() {
+        let cache = Cache::new();
+        cache.get(5);
+        cache.remove(5);
+        assert_eq!(cache.recent_keys(), vec![5]); // stale key still there
     }
 }
